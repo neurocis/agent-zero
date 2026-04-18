@@ -19,6 +19,7 @@ const model = {
   selected: "",
   selectedContext: null,
   loggedIn: false,
+  contextMemoryMap: {}, // Maps context ID to memory data
 
   // for convenience
   getSelectedChatId() {
@@ -50,6 +51,56 @@ const model = {
     }
   },
 
+  // Fetch memory usage data from context monitor plugin
+  async fetchMemoryData() {
+    try {
+      const response = await callJsonApi("/api/plugins/a0_context_monitor/context_monitor_api", {
+        action: "contexts",
+        detailed: true,
+      });
+      if (response && response.contexts && Array.isArray(response.contexts)) {
+        // Map API response to contextMemoryMap for quick lookup
+        this.contextMemoryMap = {};
+        response.contexts.forEach((ctx) => {
+          if (ctx.id && typeof ctx.estimated_size_mb === 'number') {
+            this.contextMemoryMap[ctx.id] = ctx.estimated_size_mb;
+          }
+        });
+      }
+    } catch (e) {
+      // Log to console but don't show to user - graceful degradation
+      console.error("[Memory Fetch] Error fetching context memory data:", e);
+      // Continue without memory data
+    }
+  },
+
+  // Get formatted display name with memory usage
+  getFormattedName(contextId) {
+    const context = this.contexts.find((ctx) => ctx.id === contextId);
+    if (!context) return "";
+    
+    const baseName = context.name ? context.name : "Chat #" + context.no;
+    const memorySizeMb = this.contextMemoryMap[contextId];
+    
+    if (typeof memorySizeMb === 'number') {
+      // Round to 1 decimal place
+      const rounded = memorySizeMb.toFixed(1);
+      return `${baseName} (${rounded}MB)`;
+    }
+    
+    return baseName;
+  },
+
+  // Get formatted memory size string (e.g., "(5.2MB)")
+  getMemorySizeFormatted(contextId) {
+    const memorySizeMb = this.contextMemoryMap[contextId];
+    if (typeof memorySizeMb === 'number') {
+      const rounded = memorySizeMb.toFixed(1);
+      return `(${rounded}MB)`;
+    }
+    return "";
+  },
+
   // Update contexts from polling
   applyContexts(contextsList) {
     // Sort by created_at time (newer first)
@@ -66,6 +117,10 @@ const model = {
         this.selectedContext = updated;
       }
     }
+
+    // Non-blocking: Fetch and enrich with memory data
+    // Start the fetch but don't wait for it to complete
+    this.fetchMemoryData();
   },
 
   // Select a chat
