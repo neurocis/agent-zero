@@ -159,6 +159,61 @@ class AgentContext:
         if context and context.task:
             context.task.kill()
         return context
+    
+    @staticmethod
+    def get_contexts_info(detailed: bool = False) -> dict:
+        """Get current context inventory information"""
+        inventory = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'total_contexts': len(AgentContext._contexts),
+            'contexts': []
+        }
+        
+        try:
+            with AgentContext._contexts_lock:
+                for ctx_id, ctx in AgentContext._contexts.items():
+                    ctx_info = {
+                        'id': ctx_id,
+                        'name': ctx.name or '(unnamed)',
+                        'type': ctx.type.value if hasattr(ctx, 'type') else 'unknown',
+                        'created_at': ctx.created_at.isoformat() if ctx.created_at else None,
+                        'last_message': ctx.last_message.isoformat() if ctx.last_message else None,
+                        'is_running': ctx.is_running() if hasattr(ctx, 'is_running') else False,
+                    }
+                    
+                    if detailed:
+                        size = sys.getsizeof(ctx)
+                        if hasattr(ctx, 'log') and ctx.log:
+                            size += sys.getsizeof(ctx.log)
+                            if hasattr(ctx.log, 'logs'):
+                                size += len(ctx.log.logs) * 500
+                        ctx_info['estimated_size_mb'] = round(size / (1024*1024), 2)
+                        ctx_info['estimated_size_kb'] = round(size / 1024, 0)
+                    
+                    inventory['contexts'].append(ctx_info)
+        except Exception as e:
+            PrintStyle.warning(f"Error getting contexts info: {e}")
+        
+        return inventory
+    
+    @staticmethod
+    def dump_contexts_info(file_path: str | None = None) -> bool:
+        """Dump context inventory to a JSON file"""
+        try:
+            inventory = AgentContext.get_contexts_info(detailed=True)
+            total_size_mb = sum(ctx.get('estimated_size_mb', 0) for ctx in inventory['contexts'])
+            inventory['total_estimated_size_mb'] = round(total_size_mb, 2)
+            
+            output_path = file_path or '/tmp/agent_contexts_inventory.json'
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(output_path, 'w') as f:
+                json.dump(inventory, f, indent=2)
+            
+            return True
+        except Exception as e:
+            PrintStyle.warning(f"Error dumping contexts info: {e}")
+            return False
 
     def get_data(self, key: str, recursive: bool = True):
         # recursive is not used now, prepared for context hierarchy
