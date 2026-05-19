@@ -1,7 +1,13 @@
+import asyncio
+
 from helpers.extension import Extension
 from agent import LoopData
-from plugins._memory.extensions.python.message_loop_prompts_after._50_recall_memories import DATA_NAME_TASK as DATA_NAME_TASK_MEMORIES, DATA_NAME_ITER as DATA_NAME_ITER_MEMORIES
-from helpers import plugins
+from plugins._memory.extensions.python.message_loop_prompts_after._50_recall_memories import (
+    DATA_NAME_TASK as DATA_NAME_TASK_MEMORIES,
+    DATA_NAME_ITER as DATA_NAME_ITER_MEMORIES,
+    SEARCH_TIMEOUT,
+)
+from helpers import errors, plugins
 
 class RecallWait(Extension):
     async def execute(self, loop_data: LoopData = LoopData(), **kwargs):
@@ -26,5 +32,29 @@ class RecallWait(Extension):
                     loop_data.extras_temporary["memory_recall_delayed"] = delay_text
                     return
 
-            # otherwise await the task
-            await task
+            # otherwise await the task. Memory recall is helpful but must never
+            # abort the monologue: embedding backends can timeout or transiently
+            # fail while FAISS is preparing the query vector. Convert those
+            # failures to visible warnings and continue without recalled memory.
+            try:
+                await task
+            except TimeoutError:
+                self.agent.context.log.log(
+                    type="warning",
+                    heading="Memory recall timed out",
+                    content=(
+                        f"FAISS memory recall exceeded {SEARCH_TIMEOUT}s while "
+                        "embedding/searching; continuing without recalled memories."
+                    ),
+                )
+                self.agent.set_data(DATA_NAME_TASK_MEMORIES, None)
+            except asyncio.CancelledError:
+                # Preserve real cancellation semantics for shutdown/session abort.
+                raise
+            except Exception as e:
+                self.agent.context.log.log(
+                    type="warning",
+                    heading="Memory recall failed",
+                    content=errors.format_error(e),
+                )
+                self.agent.set_data(DATA_NAME_TASK_MEMORIES, None)
